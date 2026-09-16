@@ -1,6 +1,7 @@
 /* «Дела» — записная книжка с галочками и календарём. Всё хранится в этом браузере (localStorage), сети не нужно.
    Задача: {id, text, area: work|home, bucket: day|week|month|long, key: дата|понедельник недели|месяц|'',
-            time: 'ЧЧ:ММ'|'', end: дата окончания периода|'', countdown, done, doneAt, carried (сколько раз переносилась), createdAt, updatedAt} */
+            time: 'ЧЧ:ММ'|'', end: дата окончания периода|'', countdown,
+            repeat: ''|day|week|month|year, seriesId, anchor (исходная дата повтора), occ (дата этого повтора), done, doneAt, carried (сколько раз переносилась), createdAt, updatedAt} */
 'use strict';
 
 const KEY = 'dela.v1';
@@ -71,9 +72,60 @@ function demoState() {
     mk('День рождения мамы', 'home', 'day', addDays(n.today, 26), { countdown: true }),
     mk('Подготовить презентацию к четвергу', 'work', 'week', n.week),
     mk('Разобрать шкаф', 'home', 'week', n.week),
+    mk('Снять показания счётчиков', 'home', 'day', addDays(n.today, 9), { repeat: 'month', seriesId: 'demo-meter', anchor: addDays(n.today, 9), occ: addDays(n.today, 9) }),
     mk('Отчёт в налоговую', 'work', 'month', n.month),
     mk('Выучить испанский до B1', 'home', 'long', ''),
   ] };
+}
+
+// ---------------------------------------------------------------- повторы («как в Google Календаре»): копии дела на каждую дату
+const REPEAT_NAME = { day: 'каждый день', week: 'каждую неделю', month: 'каждый месяц', year: 'каждый год' };
+const HORIZON = { day: 14, week: 70, month: 366, year: 731 };          // на сколько дней вперёд заводить копии
+const dim = (y, m) => new Date(y, m, 0).getDate();                      // дней в месяце (m: 1–12)
+function nextOcc(k, repeat, anchor) {
+  if (repeat === 'day') return addDays(k, 1);
+  if (repeat === 'week') return addDays(k, 7);
+  const [y, m] = k.split('-').map(Number), d0 = parse(anchor).getDate();
+  const [ny, nm] = repeat === 'month' ? (m === 12 ? [y + 1, 1] : [y, m + 1]) : [y + 1, m];
+  return `${ny}-${pad(nm)}-${pad(Math.min(d0, dim(ny, nm)))}`;
+}
+function repeatLabel(t) {
+  const a = parse(t.anchor || t.key);
+  return { day: 'каждый день', week: `каждую неделю по ${['понедельникам', 'вторникам', 'средам', 'четвергам', 'пятницам', 'субботам', 'воскресеньям'][(a.getDay() + 6) % 7]}`, month: `каждый месяц ${a.getDate()}-го`, year: `каждый год ${fmtDay(t.anchor || t.key)}` }[t.repeat] || '';
+}
+/* Досоздать копии повторяющихся дел до горизонта. Пропущенные даты старше месяца не заводим. */
+function ensureRepeats() {
+  const n = now(); let made = 0;
+  const series = {};
+  for (const t of state.tasks) if (t.repeat && t.seriesId) (series[t.seriesId] = series[t.seriesId] || []).push(t);
+  for (const copies of Object.values(series)) {
+    const tpl = copies.reduce((a, b) => ((b.occ || b.key) > (a.occ || a.key) ? b : a));
+    const horizon = addDays(n.today, HORIZON[tpl.repeat]);
+    let k = tpl.occ || tpl.key, guard = 0;
+    while (guard++ < 400) {
+      k = nextOcc(k, tpl.repeat, tpl.anchor || tpl.key);
+      if (k > horizon) break;
+      if (k < addDays(n.today, -31)) continue;
+      const t = Date.now();
+      state.tasks.push({ id: uid(), text: tpl.text, area: tpl.area, bucket: 'day', key: k, time: tpl.time || '', end: '', countdown: !!tpl.countdown,
+        repeat: tpl.repeat, seriesId: tpl.seriesId, anchor: tpl.anchor || tpl.key, occ: k, done: false, doneAt: 0, carried: 0, createdAt: t, updatedAt: t });
+      made++;
+    }
+  }
+  if (made) save();
+  return made;
+}
+function setRepeat(t, repeat) {
+  const occ = t.occ || t.key;
+  // будущие ещё не сделанные копии старого правила убираем, дальше заведём заново
+  if (t.seriesId) state.tasks = state.tasks.filter((x) => !(x.seriesId === t.seriesId && x !== t && !x.done && (x.occ || x.key) > occ));
+  Object.assign(t, { repeat, seriesId: repeat ? (t.seriesId || uid()) : '', anchor: repeat ? occ : '', occ: repeat ? occ : '', updatedAt: Date.now() });
+  save(); ensureRepeats();
+}
+/* Правка текста/раздела/времени у повторяющегося дела — на все его несделанные копии */
+function updateSeries(t, patch) {
+  if (t.seriesId) for (const x of state.tasks) if (x.seriesId === t.seriesId && !x.done && x !== t) Object.assign(x, patch, { updatedAt: Date.now() });
+  update(t, patch);
 }
 
 function addTask(text, area, bucket, key, time) {
@@ -177,7 +229,9 @@ function renderDay(main, n) {
   strip.appendChild(arrow(1, () => { sel.day = addDays(sel.day, 7); render(); }, 'Неделя вперёд'));
   main.appendChild(strip);
   // обратный отсчёт до событий
-  const events = state.tasks.filter((t) => t.countdown && !t.done && t.bucket === 'day' && (t.end || t.key) >= n.today && areaOk(t)).sort((a, b) => a.key.localeCompare(b.key));
+  const seen = new Set();
+  const events = state.tasks.filter((t) => t.countdown && !t.done && t.bucket === 'day' && (t.end || t.key) >= n.today && areaOk(t)).sort((a, b) => a.key.localeCompare(b.key))
+    .filter((t) => !t.seriesId || (!seen.has(t.seriesId) && seen.add(t.seriesId)));   // у повтора — только ближайший раз
   if (events.length) {
     const box = el('div', 'events');
     for (const t of events) {
@@ -267,6 +321,7 @@ function row(t, dayKey) {
     meta.appendChild(el('span', 'period', `${fmtRange(t.key, t.end)}${pos}`));
   }
   if (t.countdown && !t.done && !(t.end && t.key <= now().today)) meta.appendChild(el('span', 'until', untilText(t.key, now().today)));
+  if (t.repeat) meta.appendChild(el('span', 'repeat', '↻ ' + repeatLabel(t)));
   if (t.carried) meta.appendChild(el('span', 'carried', `перенесено ×${t.carried}`));
   if (t.done && t.doneAt) meta.appendChild(el('span', '', `сделано ${fmtDay(ymd(new Date(t.doneAt)))}`));
   $('.chk', e).onclick = () => { update(t, { done: !t.done, doneAt: t.done ? 0 : Date.now() }); render(); };
@@ -338,6 +393,21 @@ function picker(t, type, label, apply) {
   return b;
 }
 
+function repeatPicker(t) {
+  /* «Повторять…» → варианты правила */
+  const b = el('button', 'item', t.repeat ? `Повтор: ${repeatLabel(t)} — изменить` : 'Повторять…'); b.type = 'button';
+  b.onclick = () => {
+    const wrap = el('div', 'grp');
+    const a = parse(t.occ || t.key);
+    const opts = [['day', 'Каждый день'], ['week', `Каждую неделю, по ${['понедельникам', 'вторникам', 'средам', 'четвергам', 'пятницам', 'субботам', 'воскресеньям'][(a.getDay() + 6) % 7]}`],
+      ['month', `Каждый месяц ${a.getDate()}-го числа`], ['year', `Каждый год ${fmtDay(t.occ || t.key)}`]];
+    if (t.repeat) opts.push(['', 'Не повторять (будущие копии убрать)']);
+    for (const [r, label] of opts) wrap.appendChild(item((r === t.repeat ? '✓ ' : '') + label, () => setRepeat(t, r)));
+    b.replaceWith(wrap);
+  };
+  return b;
+}
+
 function rangePicker(t) {
   /* «Задать период…» → два поля «с» и «по» */
   const b = el('button', 'item', t.end ? `Период: ${fmtRange(t.key, t.end)} — изменить` : 'Задать период (с … по …)…'); b.type = 'button';
@@ -383,14 +453,16 @@ function openMenu(t) {
   const extra = [];
   if (t.bucket === 'day') {
     if (t.end) extra.push(item('Убрать период, оставить первый день', () => update(t, { end: '' })));
-    extra.push(picker(t, 'time', t.time ? `Время: ${t.time} — изменить` : 'Указать время…', (v) => update(t, { time: v })));
+    extra.push(picker(t, 'time', t.time ? `Время: ${t.time} — изменить` : 'Указать время…', (v) => updateSeries(t, { time: v })));
+    extra.push(repeatPicker(t));
     extra.push(item(t.countdown ? 'Убрать обратный отсчёт' : 'Обратный отсчёт до этого дня', () => update(t, { countdown: !t.countdown })));
   } else {
     extra.push(picker(t, 'date', 'Обратный отсчёт до даты…', (v) => update(t, { bucket: 'day', key: v, carried: 0, countdown: true })));
   }
-  extra.push(item(t.area === 'work' ? 'Это домашнее дело' : 'Это рабочее дело', () => update(t, { area: t.area === 'work' ? 'home' : 'work' })));
+  extra.push(item(t.area === 'work' ? 'Это домашнее дело' : 'Это рабочее дело', () => updateSeries(t, { area: t.area === 'work' ? 'home' : 'work' })));
   const ed = el('button', 'item', 'Изменить текст'); ed.type = 'button'; ed.onclick = () => editText(t); extra.push(ed);
-  extra.push(item('Удалить', () => { if (confirm('Удалить это дело?')) remove(t); }, 'danger'));
+  extra.push(item(t.repeat ? 'Удалить только этот раз' : 'Удалить', () => { if (confirm('Удалить это дело?')) remove(t); }, 'danger'));
+  if (t.repeat) extra.push(item('Удалить все повторы', () => { if (confirm('Удалить это дело и все его несделанные повторы?')) { state.tasks = state.tasks.filter((x) => !(x.seriesId === t.seriesId && (!x.done || x === t))); save(); } }, 'danger'));
   panel.appendChild(group(...extra));
   sheet.setAttribute('open', '');
 }
@@ -401,7 +473,7 @@ function editText(t) {
   const r = el('div', 'row');
   const cancel = el('button', 'btn', 'Отмена'); cancel.type = 'button'; cancel.onclick = closeSheet;
   const ok = el('button', 'btn primary', 'Сохранить'); ok.type = 'button';
-  ok.onclick = () => { const v = ta.value.trim(); if (v) update(t, { text: v }); closeSheet(); render(); };
+  ok.onclick = () => { const v = ta.value.trim(); if (v) updateSeries(t, { text: v }); closeSheet(); render(); };
   r.append(cancel, ok); panel.append(ta, r); ta.focus();
 }
 
@@ -442,7 +514,7 @@ $('#importfile').onchange = async (e) => {
       if (!mine) { state.tasks.push(t); added++; }
       else if ((t.updatedAt || 0) > (mine.updatedAt || 0)) { Object.assign(mine, t); updated++; }
     }
-    save(); rollover();
+    save(); rollover(); ensureRepeats();
     flash(`Загружено: новых ${added}, обновлено ${updated}`);
   } catch (err) { alert('Не смог прочитать файл: ' + err.message); }
 };
@@ -450,13 +522,14 @@ $('#importfile').onchange = async (e) => {
 // ---------------------------------------------------------------- старт
 (function start() {
   const moved = rollover();
+  ensureRepeats();
   render();
   if (moved) flash(`Перенёс с прошлых дней: ${moved}`, 5000);
   // если приложение висело открытым через полночь — перенести при возвращении
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && state.lastOpen !== now().today) {
       Object.assign(sel, { day: now().today, week: now().week, month: now().month });
-      const m = rollover(); render(); if (m) flash(`Перенёс с прошлых дней: ${m}`, 5000);
+      const m = rollover(); ensureRepeats(); render(); if (m) flash(`Перенёс с прошлых дней: ${m}`, 5000);
     }
   });
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
