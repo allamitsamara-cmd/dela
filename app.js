@@ -27,6 +27,15 @@ const fmtWeek = (s) => { const a = parse(s), b = parse(addDays(s, 6));
   return a.getMonth() === b.getMonth() ? `${a.getDate()}–${b.getDate()} ${MONTHS[a.getMonth()]}` : `${fmtDay(s)} – ${fmtDay(addDays(s, 6))}`; };
 const fmtMonth = (s) => { const [y, m] = s.split('-').map(Number); return `${MONTHS_N[m - 1]} ${y}`; };
 const fmtMonthV = (s) => { const [y, m] = s.split('-').map(Number); return `${MONTHS_V[m - 1]}${y !== new Date().getFullYear() ? ' ' + y : ''}`; };
+const plural = (n, f) => f[n % 10 === 1 && n % 100 !== 11 ? 0 : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? 1 : 2];
+const daysBetween = (a, b) => Math.round((parse(b) - parse(a)) / 864e5);
+function untilText(key, today) {                                // «через 12 дней» / «сегодня» / «прошло 3 дня»
+  const d = daysBetween(today, key);
+  if (d === 0) return 'сегодня';
+  if (d === 1) return 'завтра';
+  if (d > 0) return `через ${d} ${plural(d, ['день', 'дня', 'дней'])}`;
+  return `прошло ${-d} ${plural(-d, ['день', 'дня', 'дней'])}`;
+}
 const relDay = (s, today) => (s === today ? 'сегодня' : s === addDays(today, 1) ? 'завтра' : s === addDays(today, -1) ? 'вчера' : '');
 
 function now() {
@@ -35,16 +44,36 @@ function now() {
 }
 
 // ---------------------------------------------------------------- данные
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const DEMO = new URLSearchParams(location.search).has('demo');   // ?demo — показать с примерами, ничего не сохранять
 let state = load();
 function load() {
+  if (DEMO) return demoState();
   try {
     const s = JSON.parse(localStorage.getItem(KEY) || 'null');
     if (s && Array.isArray(s.tasks)) return s;
   } catch (e) { /* испорченное хранилище — начинаем заново */ }
   return { tasks: [], tab: 'day', area: 'all', addArea: 'work', lastOpen: '' };
 }
-function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { alert('Не удалось сохранить: ' + e.message); } }
-const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+function save() { if (DEMO) return; try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { alert('Не удалось сохранить: ' + e.message); } }
+
+function demoState() {
+  const n = now(), t = Date.now();
+  const mk = (text, area, bucket, key, extra = {}) => ({ id: uid(), text, area, bucket, key, time: '', done: false, doneAt: 0, carried: 0, createdAt: t, updatedAt: t, ...extra });
+  return { tab: 'day', area: 'all', addArea: 'work', lastOpen: n.today, tasks: [
+    mk('Позвонить поставщику по вакцинам', 'work', 'day', n.today, { time: '11:00' }),
+    mk('Подписать график на октябрь', 'work', 'day', n.today, { carried: 2 }),
+    mk('Забрать анализы из лаборатории', 'work', 'day', n.today),
+    mk('Купить корм коту', 'home', 'day', n.today, { done: true, doneAt: t }),
+    mk('Родительское собрание', 'home', 'day', addDays(n.today, 2), { time: '18:00' }),
+    mk('Отпуск', 'home', 'day', addDays(n.today, 12), { countdown: true }),
+    mk('День рождения мамы', 'home', 'day', addDays(n.today, 26), { countdown: true }),
+    mk('Проверить остатки на складе', 'work', 'week', n.week),
+    mk('Разобрать шкаф', 'home', 'week', n.week),
+    mk('Отчёт в налоговую', 'work', 'month', n.month),
+    mk('Выучить испанский до B1', 'home', 'long', ''),
+  ] };
+}
 
 function addTask(text, area, bucket, key, time) {
   const t = Date.now();
@@ -58,7 +87,7 @@ function remove(task) { state.tasks = state.tasks.filter((t) => t !== task); sav
 function rollover() {
   const n = now(); let moved = 0;
   for (const t of state.tasks) {
-    if (t.done) continue;
+    if (t.done || t.countdown) continue;                       // событие с отсчётом остаётся на своей дате
     const cur = { day: n.today, week: n.week, month: n.month }[t.bucket];
     if (cur && t.key && t.key < cur) { t.key = cur; t.carried = (t.carried || 0) + 1; t.updatedAt = Date.now(); moved++; }
   }
@@ -144,6 +173,19 @@ function renderDay(main, n) {
   }
   strip.appendChild(arrow(1, () => { sel.day = addDays(sel.day, 7); render(); }, 'Неделя вперёд'));
   main.appendChild(strip);
+  // обратный отсчёт до событий
+  const events = state.tasks.filter((t) => t.countdown && !t.done && t.bucket === 'day' && t.key >= n.today && areaOk(t)).sort((a, b) => a.key.localeCompare(b.key));
+  if (events.length) {
+    const box = el('div', 'events');
+    for (const t of events) {
+      const d = daysBetween(n.today, t.key);
+      const c = el('button', 'ev ' + t.area, `<b>${d === 0 ? 'сегодня' : d}</b><small>${d === 0 ? '' : plural(d, ['день', 'дня', 'дней'])}</small><span></span><small>${fmtDay(t.key)}</small>`);
+      c.type = 'button'; $('span', c).textContent = t.text;
+      c.onclick = () => { sel.day = t.key; render(); };
+      box.appendChild(c);
+    }
+    main.appendChild(box);
+  }
   const items = tasksFor('day', sel.day);
   const rel = relDay(sel.day, n.today);
   const h = heading(fmtDayFull(sel.day) + (rel ? ` <em>${rel}</em>` : ''), items);
@@ -212,6 +254,7 @@ function row(t) {
   if (t.time) text.appendChild(el('span', 'time', t.time));
   text.appendChild(document.createTextNode(t.text));
   const meta = $('.meta', e);
+  if (t.countdown && !t.done) meta.appendChild(el('span', 'until', untilText(t.key, now().today)));
   if (t.carried) meta.appendChild(el('span', 'carried', `перенесено ×${t.carried}`));
   if (t.done && t.doneAt) meta.appendChild(el('span', '', `сделано ${fmtDay(ymd(new Date(t.doneAt)))}`));
   $('.chk', e).onclick = () => { update(t, { done: !t.done, doneAt: t.done ? 0 : Date.now() }); render(); };
@@ -290,15 +333,14 @@ function openMenu(t) {
   const mv = (bucket, key, carried) => () => update(t, { bucket, key, carried: carried ? (t.carried || 0) + 1 : 0, time: bucket === 'day' ? t.time : '' });
   // «домашняя» дата задачи — от неё считаем неделю и месяц при переносе между списками
   const base = t.bucket === 'day' ? t.key : t.bucket === 'week' ? (t.key === n.week ? n.today : t.key) : t.bucket === 'month' ? (t.key === n.month ? n.today : t.key + '-01') : n.today;
-  const moves = [];
+  const moves = [picker(t, 'date', 'Перенести на другую дату…', (v) => update(t, { bucket: 'day', key: v, carried: 0 }))];
   if (t.bucket === 'day') {
     const next = addDays(t.key < n.today ? n.today : t.key, 1);
-    moves.push(item(next === addDays(n.today, 1) ? 'Перенести на завтра' : `Перенести на ${fmtDay(next)}`, mv('day', next, true)));
+    moves.push(item(next === addDays(n.today, 1) ? 'На завтра' : `На ${fmtDay(next)}`, mv('day', next, true)));
     if (t.key !== n.today) moves.push(item('На сегодня', mv('day', n.today, false)));
   } else {
     moves.push(item('На сегодня', mv('day', n.today)));
   }
-  moves.push(picker(t, 'date', 'Выбрать дату…', (v) => update(t, { bucket: 'day', key: v, carried: 0 })));
   if (t.bucket === 'week') moves.push(item(t.key === n.week ? 'На следующую неделю' : 'На эту неделю', t.key === n.week ? mv('week', addDays(n.week, 7), true) : mv('week', n.week, false)));
   else moves.push(item(`На неделю ${fmtWeek(weekOf(base))}`, mv('week', weekOf(base))));
   if (t.bucket === 'month') moves.push(item(t.key === n.month ? 'На следующий месяц' : 'На этот месяц', t.key === n.month ? mv('month', addMonths(n.month, 1), true) : mv('month', n.month, false)));
@@ -306,7 +348,12 @@ function openMenu(t) {
   if (t.bucket !== 'long') moves.push(item('В долгосрочные', mv('long', '')));
   panel.appendChild(group(...moves));
   const extra = [];
-  if (t.bucket === 'day') extra.push(picker(t, 'time', t.time ? `Время: ${t.time} — изменить` : 'Указать время…', (v) => update(t, { time: v })));
+  if (t.bucket === 'day') {
+    extra.push(picker(t, 'time', t.time ? `Время: ${t.time} — изменить` : 'Указать время…', (v) => update(t, { time: v })));
+    extra.push(item(t.countdown ? 'Убрать обратный отсчёт' : 'Обратный отсчёт до этого дня', () => update(t, { countdown: !t.countdown })));
+  } else {
+    extra.push(picker(t, 'date', 'Обратный отсчёт до даты…', (v) => update(t, { bucket: 'day', key: v, carried: 0, countdown: true })));
+  }
   extra.push(item(t.area === 'work' ? 'Это домашнее дело' : 'Это рабочее дело', () => update(t, { area: t.area === 'work' ? 'home' : 'work' })));
   const ed = el('button', 'item', 'Изменить текст'); ed.type = 'button'; ed.onclick = () => editText(t); extra.push(ed);
   extra.push(item('Удалить', () => { if (confirm('Удалить это дело?')) remove(t); }, 'danger'));
