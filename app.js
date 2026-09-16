@@ -179,7 +179,7 @@ function renderDay(main, n) {
     const box = el('div', 'events');
     for (const t of events) {
       const d = daysBetween(n.today, t.key);
-      const c = el('button', 'ev ' + t.area, `<b>${d === 0 ? 'сегодня' : d}</b><small>${d === 0 ? '' : plural(d, ['день', 'дня', 'дней'])}</small><span></span><small>${fmtDay(t.key)}</small>`);
+      const c = el('button', 'ev ' + t.area, `<b>${d === 0 ? '·' : d}</b><small class="unit">${d === 0 ? 'сегодня' : plural(d, ['день', 'дня', 'дней'])}</small><span></span><small>${fmtDay(t.key)}</small>`);
       c.type = 'button'; $('span', c).textContent = t.text;
       c.onclick = () => { sel.day = t.key; render(); };
       box.appendChild(c);

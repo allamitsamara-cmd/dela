@@ -117,12 +117,13 @@ h2 .cur,.nav .cur{margin-left:auto;font-size:12px;color:var(--blue);font-weight:
 .grid .c.out{opacity:.4;box-shadow:none;background:transparent}
 .grid .c.today{color:var(--blue);font-weight:700;box-shadow:inset 0 0 0 2px var(--blue)}
 .hint{color:var(--muted);font-size:14px;margin:14px 4px}
-.events{display:flex;gap:8px;overflow-x:auto;margin-top:12px;padding:2px 2px 6px;scrollbar-width:thin}
-.ev{flex:0 0 auto;width:132px;background:var(--evbg);color:#fff;border-radius:12px;padding:10px 12px;text-align:left;box-shadow:var(--shadow)}
+.events{display:flex;flex-direction:column;gap:6px;margin-top:12px}
+.ev{display:flex;align-items:baseline;gap:8px;background:var(--evbg);color:#fff;border-radius:10px;padding:6px 12px;text-align:left;box-shadow:var(--shadow);width:100%}
 .ev.home{background:var(--evbg2)}
-.ev b{display:block;font:700 28px/1 var(--serif)}
-.ev small{display:block;font-size:11px;opacity:.75;margin-top:2px}
-.ev span{display:block;font-size:13px;font-weight:600;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ev b{font:700 20px/1 var(--serif);min-width:36px;text-align:right}
+.ev small{font-size:11px;opacity:.75;white-space:nowrap}
+.ev small.unit{width:34px}
+.ev span{flex:1;min-width:0;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .meta .until{color:var(--blue);font-weight:600}
 .text .time{font:600 14px var(--mono);color:var(--blue);margin-right:8px}
 .sheet .pick{display:flex;gap:8px;align-items:center;padding:8px}
