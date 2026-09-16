@@ -1,0 +1,16 @@
+{
+  "name": "Дела",
+  "short_name": "Дела",
+  "description": "Записная книжка дел: сегодня, неделя, месяц, долгосрочные. Работа и дом. Невыполненное само переезжает на завтра.",
+  "lang": "ru",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#F1F6FC",
+  "theme_color": "#1E4C97",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
