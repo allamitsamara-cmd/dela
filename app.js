@@ -1,6 +1,6 @@
 /* «Дела» — записная книжка с галочками и календарём. Всё хранится в этом браузере (localStorage), сети не нужно.
    Задача: {id, text, area: work|home, bucket: day|week|month|long, key: дата|понедельник недели|месяц|'',
-            time: 'ЧЧ:ММ'|'' , done, doneAt, carried (сколько раз переносилась), createdAt, updatedAt} */
+            time: 'ЧЧ:ММ'|'', end: дата окончания периода|'', countdown, done, doneAt, carried (сколько раз переносилась), createdAt, updatedAt} */
 'use strict';
 
 const KEY = 'dela.v1';
@@ -25,6 +25,7 @@ const fmtDay = (s) => { const d = parse(s); return `${d.getDate()} ${MONTHS[d.ge
 const fmtDayFull = (s) => { const d = parse(s); return `${cap(DAYS[d.getDay()])}, ${d.getDate()} ${MONTHS[d.getMonth()]}${d.getFullYear() !== new Date().getFullYear() ? ' ' + d.getFullYear() : ''}`; };
 const fmtWeek = (s) => { const a = parse(s), b = parse(addDays(s, 6));
   return a.getMonth() === b.getMonth() ? `${a.getDate()}–${b.getDate()} ${MONTHS[a.getMonth()]}` : `${fmtDay(s)} – ${fmtDay(addDays(s, 6))}`; };
+const fmtRange = (a, b) => (a.slice(0, 7) === b.slice(0, 7) ? `${parse(a).getDate()}–${fmtDay(b)}` : `${fmtDay(a)} – ${fmtDay(b)}`);
 const fmtMonth = (s) => { const [y, m] = s.split('-').map(Number); return `${MONTHS_N[m - 1]} ${y}`; };
 const fmtMonthV = (s) => { const [y, m] = s.split('-').map(Number); return `${MONTHS_V[m - 1]}${y !== new Date().getFullYear() ? ' ' + y : ''}`; };
 const plural = (n, f) => f[n % 10 === 1 && n % 100 !== 11 ? 0 : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? 1 : 2];
@@ -66,7 +67,7 @@ function demoState() {
     mk('Отправить отчёт за неделю', 'work', 'day', n.today),
     mk('Купить корм коту', 'home', 'day', n.today, { done: true, doneAt: t }),
     mk('Родительское собрание', 'home', 'day', addDays(n.today, 2), { time: '18:00' }),
-    mk('Отпуск', 'home', 'day', addDays(n.today, 12), { countdown: true }),
+    mk('Отпуск', 'home', 'day', addDays(n.today, 12), { countdown: true, end: addDays(n.today, 19) }),
     mk('День рождения мамы', 'home', 'day', addDays(n.today, 26), { countdown: true }),
     mk('Подготовить презентацию к четвергу', 'work', 'week', n.week),
     mk('Разобрать шкаф', 'home', 'week', n.week),
@@ -88,8 +89,9 @@ function rollover() {
   const n = now(); let moved = 0;
   for (const t of state.tasks) {
     if (t.done || t.countdown) continue;                       // событие с отсчётом остаётся на своей дате
+    if (t.bucket === 'day' && t.end && t.end >= n.today) continue;   // период ещё идёт
     const cur = { day: n.today, week: n.week, month: n.month }[t.bucket];
-    if (cur && t.key && t.key < cur) { t.key = cur; t.carried = (t.carried || 0) + 1; t.updatedAt = Date.now(); moved++; }
+    if (cur && t.key && t.key < cur) { t.key = cur; t.end = ''; t.carried = (t.carried || 0) + 1; t.updatedAt = Date.now(); moved++; }
   }
   state.lastOpen = n.today;
   if (moved) save();
@@ -103,8 +105,9 @@ let notice = '';
 function flash(msg, ms = 4000) { notice = msg; render(); setTimeout(() => { notice = ''; render(); }, ms); }
 
 const areaOk = (t) => state.area === 'all' || t.area === state.area;
-const tasksFor = (bucket, key) => state.tasks.filter((t) => t.bucket === bucket && t.key === key && areaOk(t));
-const openDay = (key) => state.tasks.filter((t) => t.bucket === 'day' && t.key === key && !t.done && areaOk(t));
+const onDay = (t, k) => t.bucket === 'day' && (t.key === k || (!!t.end && t.key <= k && k <= t.end));   // дело с периодом видно на каждом его дне
+const tasksFor = (bucket, key) => state.tasks.filter((t) => (bucket === 'day' ? onDay(t, key) : t.bucket === bucket && t.key === key) && areaOk(t));
+const openDay = (key) => state.tasks.filter((t) => onDay(t, key) && !t.done && areaOk(t));
 const sortOpen = (a, b) => (a.time && b.time ? a.time.localeCompare(b.time) : a.time ? -1 : b.time ? 1 : a.createdAt - b.createdAt);
 
 // ---------------------------------------------------------------- отрисовка
@@ -130,12 +133,12 @@ function render() {
   renderAddHint();
 }
 
-function list(items, emptyText) {
+function list(items, emptyText, dayKey) {
   const box = el('div', 'list');
   const open = items.filter((t) => !t.done).sort(sortOpen);
   const done = items.filter((t) => t.done).sort((a, b) => b.doneAt - a.doneAt);
   if (!items.length && emptyText) box.appendChild(el('div', 'empty', emptyText));
-  [...open, ...done].forEach((t) => box.appendChild(row(t)));
+  [...open, ...done].forEach((t) => box.appendChild(row(t, dayKey)));
   return box;
 }
 function heading(title, items) {
@@ -174,12 +177,16 @@ function renderDay(main, n) {
   strip.appendChild(arrow(1, () => { sel.day = addDays(sel.day, 7); render(); }, 'Неделя вперёд'));
   main.appendChild(strip);
   // обратный отсчёт до событий
-  const events = state.tasks.filter((t) => t.countdown && !t.done && t.bucket === 'day' && t.key >= n.today && areaOk(t)).sort((a, b) => a.key.localeCompare(b.key));
+  const events = state.tasks.filter((t) => t.countdown && !t.done && t.bucket === 'day' && (t.end || t.key) >= n.today && areaOk(t)).sort((a, b) => a.key.localeCompare(b.key));
   if (events.length) {
     const box = el('div', 'events');
     for (const t of events) {
       const d = daysBetween(n.today, t.key);
-      const c = el('button', 'ev ' + t.area, `<b>${d === 0 ? '·' : d}</b><small class="unit">${d === 0 ? 'сегодня' : plural(d, ['день', 'дня', 'дней'])}</small><span></span><small>${fmtDay(t.key)}</small>`);
+      const when = t.end ? fmtRange(t.key, t.end) : fmtDay(t.key);
+      let num = d, unit = plural(d, ['день', 'дня', 'дней']);
+      if (d <= 0 && t.end) { num = daysBetween(t.key, n.today) + 1; unit = `из ${daysBetween(t.key, t.end) + 1} дн.`; }   // период идёт: «3 из 8 дн.»
+      else if (d === 0) { num = '·'; unit = 'сегодня'; }
+      const c = el('button', 'ev ' + t.area, `<b>${num}</b><small class="unit">${unit}</small><span></span><small>${when}</small>`);
       c.type = 'button'; $('span', c).textContent = t.text;
       c.onclick = () => { sel.day = t.key; render(); };
       box.appendChild(c);
@@ -191,7 +198,7 @@ function renderDay(main, n) {
   const h = heading(fmtDayFull(sel.day) + (rel ? ` <em>${rel}</em>` : ''), items);
   if (sel.day !== n.today) { const b = el('button', 'cur', 'к сегодня'); b.type = 'button'; b.onclick = () => { sel.day = n.today; render(); }; h.appendChild(b); }
   main.appendChild(h);
-  main.appendChild(list(items, sel.day === n.today ? 'На сегодня ничего не записано' : 'На этот день ничего не записано'));
+  main.appendChild(list(items, sel.day === n.today ? 'На сегодня ничего не записано' : 'На этот день ничего не записано', sel.day));
 }
 
 /* ---- Неделя: список на неделю + дела по дням этой недели */
@@ -209,7 +216,7 @@ function renderWeek(main, n) {
     any = true;
     const h = heading(`${cap(DAYS_S[i])}, ${fmtDay(k)}`, dayItems);
     const b = el('button', 'cur', 'открыть день'); b.type = 'button'; b.onclick = () => { sel.day = k; state.tab = 'day'; save(); render(); }; h.appendChild(b);
-    main.appendChild(h); main.appendChild(list(dayItems));
+    main.appendChild(h); main.appendChild(list(dayItems, '', k));
   }
   if (!any) main.appendChild(el('p', 'hint', 'По дням на этой неделе пока ничего не записано'));
 }
@@ -243,7 +250,7 @@ function renderLong(main) {
   main.appendChild(list(items, 'Долгосрочных дел пока нет'));
 }
 
-function row(t) {
+function row(t, dayKey) {
   const e = el('div', `task ${t.area}${t.done ? ' done' : ''}`, `
     <button class="chk" aria-label="${t.done ? 'Снять галочку' : 'Выполнено'}" aria-pressed="${t.done}">
       <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 7.5l3.2 3L12 3.5"/></svg>
@@ -254,7 +261,12 @@ function row(t) {
   if (t.time) text.appendChild(el('span', 'time', t.time));
   text.appendChild(document.createTextNode(t.text));
   const meta = $('.meta', e);
-  if (t.countdown && !t.done) meta.appendChild(el('span', 'until', untilText(t.key, now().today)));
+  if (t.end) {
+    const total = daysBetween(t.key, t.end) + 1;
+    const pos = dayKey && dayKey >= t.key && dayKey <= t.end ? ` · день ${daysBetween(t.key, dayKey) + 1} из ${total}` : ` · ${total} ${plural(total, ['день', 'дня', 'дней'])}`;
+    meta.appendChild(el('span', 'period', `${fmtRange(t.key, t.end)}${pos}`));
+  }
+  if (t.countdown && !t.done && !(t.end && t.key <= now().today)) meta.appendChild(el('span', 'until', untilText(t.key, now().today)));
   if (t.carried) meta.appendChild(el('span', 'carried', `перенесено ×${t.carried}`));
   if (t.done && t.doneAt) meta.appendChild(el('span', '', `сделано ${fmtDay(ymd(new Date(t.doneAt)))}`));
   $('.chk', e).onclick = () => { update(t, { done: !t.done, doneAt: t.done ? 0 : Date.now() }); render(); };
@@ -326,14 +338,35 @@ function picker(t, type, label, apply) {
   return b;
 }
 
+function rangePicker(t) {
+  /* «Задать период…» → два поля «с» и «по» */
+  const b = el('button', 'item', t.end ? `Период: ${fmtRange(t.key, t.end)} — изменить` : 'Задать период (с … по …)…'); b.type = 'button';
+  b.onclick = () => {
+    const wrap = el('div', 'pick range');
+    const from = el('input'); from.type = 'date'; from.value = t.bucket === 'day' ? t.key : now().today;
+    const to = el('input'); to.type = 'date'; to.value = t.end || from.value;
+    from.onchange = () => { if (to.value < from.value) to.value = from.value; };
+    const ok = el('button', 'btn primary', 'Готово'); ok.type = 'button';
+    ok.onclick = () => {
+      if (!from.value) return;
+      const end = to.value && to.value > from.value ? to.value : '';
+      update(t, { bucket: 'day', key: from.value, end, carried: 0 }); closeSheet(); render();
+    };
+    wrap.append(el('small', '', 'с'), from, el('small', '', 'по'), to, ok); b.replaceWith(wrap); from.focus();
+  };
+  return b;
+}
+
 function openMenu(t) {
   const n = now();
   panel.innerHTML = '';
   panel.appendChild(el('p', 'title', (t.time ? t.time + ' ' : '') + t.text));
-  const mv = (bucket, key, carried) => () => update(t, { bucket, key, carried: carried ? (t.carried || 0) + 1 : 0, time: bucket === 'day' ? t.time : '' });
+  const shift = (key) => (t.end && t.bucket === 'day' ? addDays(t.end, daysBetween(t.key, key)) : '');   // период переезжает целиком
+  const mv = (bucket, key, carried) => () => update(t, { bucket, key, end: bucket === 'day' ? shift(key) : '', carried: carried ? (t.carried || 0) + 1 : 0, time: bucket === 'day' ? t.time : '' });
   // «домашняя» дата задачи — от неё считаем неделю и месяц при переносе между списками
   const base = t.bucket === 'day' ? t.key : t.bucket === 'week' ? (t.key === n.week ? n.today : t.key) : t.bucket === 'month' ? (t.key === n.month ? n.today : t.key + '-01') : n.today;
-  const moves = [picker(t, 'date', 'Перенести на другую дату…', (v) => update(t, { bucket: 'day', key: v, carried: 0 }))];
+  const moves = [picker(t, 'date', 'Перенести на другую дату…', (v) => update(t, { bucket: 'day', key: v, end: t.bucket === 'day' ? shift(v) : '', carried: 0 }))];
+  moves.push(rangePicker(t));
   if (t.bucket === 'day') {
     const next = addDays(t.key < n.today ? n.today : t.key, 1);
     moves.push(item(next === addDays(n.today, 1) ? 'На завтра' : `На ${fmtDay(next)}`, mv('day', next, true)));
@@ -349,6 +382,7 @@ function openMenu(t) {
   panel.appendChild(group(...moves));
   const extra = [];
   if (t.bucket === 'day') {
+    if (t.end) extra.push(item('Убрать период, оставить первый день', () => update(t, { end: '' })));
     extra.push(picker(t, 'time', t.time ? `Время: ${t.time} — изменить` : 'Указать время…', (v) => update(t, { time: v })));
     extra.push(item(t.countdown ? 'Убрать обратный отсчёт' : 'Обратный отсчёт до этого дня', () => update(t, { countdown: !t.countdown })));
   } else {
