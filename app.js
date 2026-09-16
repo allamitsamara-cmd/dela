@@ -328,7 +328,7 @@ function editText(t) {
 $('#menu').onclick = () => {
   panel.innerHTML = '';
   const open = state.tasks.filter((t) => !t.done).length, done = state.tasks.length - open;
-  panel.appendChild(el('p', 'title', `Всего дел: ${state.tasks.length} (открытых ${open}, сделано ${done}). Хранятся в этом браузере.`));
+  panel.appendChild(el('p', 'title', `Всего дел: ${state.tasks.length} (открытых ${open}, сделано ${done}). Хранятся только в этом браузере и никуда не отправляются.`));
   panel.appendChild(group(
     item('Сохранить копию в файл', exportJson),
     item('Загрузить копию из файла', () => $('#importfile').click()),
