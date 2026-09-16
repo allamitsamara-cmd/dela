@@ -61,14 +61,14 @@ function demoState() {
   const n = now(), t = Date.now();
   const mk = (text, area, bucket, key, extra = {}) => ({ id: uid(), text, area, bucket, key, time: '', done: false, doneAt: 0, carried: 0, createdAt: t, updatedAt: t, ...extra });
   return { tab: 'day', area: 'all', addArea: 'work', lastOpen: n.today, tasks: [
-    mk('Позвонить поставщику по вакцинам', 'work', 'day', n.today, { time: '11:00' }),
-    mk('Подписать график на октябрь', 'work', 'day', n.today, { carried: 2 }),
-    mk('Забрать анализы из лаборатории', 'work', 'day', n.today),
+    mk('Позвонить в банк по карте', 'work', 'day', n.today, { time: '11:00' }),
+    mk('Подписать договор с арендодателем', 'work', 'day', n.today, { carried: 2 }),
+    mk('Отправить отчёт за неделю', 'work', 'day', n.today),
     mk('Купить корм коту', 'home', 'day', n.today, { done: true, doneAt: t }),
     mk('Родительское собрание', 'home', 'day', addDays(n.today, 2), { time: '18:00' }),
     mk('Отпуск', 'home', 'day', addDays(n.today, 12), { countdown: true }),
     mk('День рождения мамы', 'home', 'day', addDays(n.today, 26), { countdown: true }),
-    mk('Проверить остатки на складе', 'work', 'week', n.week),
+    mk('Подготовить презентацию к четвергу', 'work', 'week', n.week),
     mk('Разобрать шкаф', 'home', 'week', n.week),
     mk('Отчёт в налоговую', 'work', 'month', n.month),
     mk('Выучить испанский до B1', 'home', 'long', ''),
